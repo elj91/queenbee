@@ -61,3 +61,37 @@ Compte utilisateur : pour se connecter, avec un rôle
 2. Récoltes déclarées (date, quantité) et leur validation : gonfler ou inventer des quantités pour toucher plus (primes, paiements, ventes), ou faire valider de fausses récoltes. Une fausse récolte validée fausse aussi les chiffres de l'association.
 
 3. Identifiants de connexion et rôles (login, mot de passe, rôle) : se connecter à la place d'un coordinateur ou d'un administrateur, valider ses propres récoltes, effacer des alertes ou lire toutes les données.
+
+## Partie C · Sensibilité et menaces (STRIDE)
+
+| Entité | Sensibilité | Qui lit | Qui modifie | Menace STRIDE et ce que gagne l'attaquant |
+|---|---|---|---|---|
+| SITE RUCHER | interne | tous les rôles | gestionnaire, administrateur | I : connaître les 8 sites pour cibler ceux à voler |
+| RUCHE | confidentielle | apicultrice propriétaire, coordinateur du site, gestionnaire, administrateur | apicultrice propriétaire, administrateur | I : connaître la position GPS pour voler la ruche |
+| APICULTRICE | confidentielle (téléphone) | l'apicultrice elle-même, coordinateur du site, gestionnaire, administrateur | l'apicultrice elle-même, administrateur | I : démarchage, hameçonnage ciblé |
+| COOPÉRATIVE | publique | tous les rôles | gestionnaire, administrateur | T : ajouter une fausse adhésion pour bénéficier d'aides |
+| COMPTE | critique | administrateur | administrateur, titulaire (son mot de passe) | S : se connecter à la place d'un coordinateur pour valider ses propres récoltes |
+| MESURE | interne | apicultrice propriétaire, coordinateur, gestionnaire, administrateur | aucun (écrit par le capteur, jamais modifié) | **T (rejeu) : renvoyer une ancienne mesure de poids pour masquer un vol en cours** |
+| INSPECTION | interne | apicultrice propriétaire, coordinateur, gestionnaire | apicultrice qui l'a faite, administrateur | R : nier avoir constaté la perte de la reine |
+| RÉCOLTE | confidentielle | apicultrice propriétaire, coordinateur du site, gestionnaire | apicultrice (déclaration), coordinateur (validation) | **R : récolte validée sans trace du coordinateur qui l'a validée, impossible de remonter à lui** |
+| ALERTE | interne | coordinateur, gestionnaire, administrateur | système (création), coordinateur (traitement) | D : saturer le système d'alertes pour qu'un vrai vol passe inaperçu |
+| HISTORIQUE DES ACTIONS (journal) | critique | administrateur | aucun (ajout seulement) | **E : un compte efface l'historique pour masquer ses actions, puis se donne des droits** |
+
+
+## Lab 2
+## Schéma relationnel
+
+
+
+| Table | Clé primaire | Autres colonnes | Clés étrangères (vers quelle table) |
+|---|---|---|---|
+| site | id (text, ex. SN-CASA) | nom, pays | — |
+| cooperative | id (uuid) | nom | — |
+| apicultrice | id (uuid) | nom, telephone | site_id (site) |
+| ruche | id (uuid) | code_ruche (UNIQUE), position_gps, date_installation | site_id (site), apicultrice_id (apicultrice) |
+| mesure | id (bigint, généré) | horodatage, poids_kg, temperature_int, temperature_ext, humidite_pct, activite_sonore, batterie_pct | ruche_id (ruche) |
+| inspection | id (uuid) | date_inspection, etat_colonie, reine_presente, observations | ruche_id (ruche), apicultrice_id (apicultrice) |
+| recolte | id (uuid) | date_recolte, quantite_kg, statut, date_validation | ruche_id (ruche), validee_par (compte) |
+| alerte | id (uuid) | horodatage, type, niveau_confiance | ruche_id (ruche) |
+| compte | id (uuid) | login, mot_de_passe, role | apicultrice_id (apicultrice) UNIQUE, site_id (site) |
+| adhesion | (apicultrice_id, cooperative_id) — clé composée | date_adhesion | apicultrice_id (apicultrice), cooperative_id (cooperative) |
