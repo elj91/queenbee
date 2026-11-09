@@ -53,3 +53,22 @@ INSERT INTO norm.ruche       SELECT DISTINCT ruche_code, site_id, telephone    F
 INSERT INTO norm.mesure      SELECT DISTINCT ruche_code, horodatage, poids_kg, temp_int_c FROM extrait_plat;
 
 COMMIT;
+
+-- ──────────────────────────────────────────────
+-- Vue pour la preuve sans perte (étape 5.3)
+-- ──────────────────────────────────────────────
+CREATE OR REPLACE VIEW norm.reconstruit AS
+SELECT r.ruche_code,
+       s.site_id,
+       s.site_nom,
+       s.pays,
+       a.apicultrice,
+       a.telephone,
+       a.cooperative,
+       m.horodatage,
+       m.poids_kg,
+       m.temp_int_c
+FROM norm.mesure m
+JOIN norm.ruche r        ON r.ruche_code = m.ruche_code
+JOIN norm.site s         ON s.site_id = r.site_id
+JOIN norm.apicultrice a  ON a.telephone = r.telephone;
