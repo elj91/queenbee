@@ -1,1 +1,14 @@
+# Énoncé du TP, pas un livrable
 TP_Jour1_QueenBee_M1.pdf
+TP_Jour2_QueenBee.pdf
+
+# Dumps PostgreSQL : trop gros, contiennent des données personnelles.
+# On ne commite jamais une sauvegarde — on commite son empreinte (.sha256).
+*.dump
+
+# Divers : artefacts macOS, environnements virtuels Python, caches
+.DS_Store
+__pycache__/
+*.pyc
+.venv/
+venv/
