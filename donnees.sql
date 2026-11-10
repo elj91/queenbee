@@ -1,4 +1,8 @@
 -- donnees.sql : jeu d'essai Queen Bee
+-- Les mots de passe sont HASHÉS avec bcrypt (crypt + gen_salt('bf')).
+-- Rien n'est jamais stocké en clair. Le mot de passe en clair ci-dessous ('aChanger!2026')
+-- ne sert qu'à initialiser le jeu de test : chaque apicultrice doit le changer à la 1ère connexion.
+
 BEGIN;
 
 -- ──────────────────────────────────────────────
@@ -11,7 +15,7 @@ INSERT INTO site (id, nom, pays) VALUES
     ('CM-FOUM', 'Foumban',         'Cameroun');
 
 -- ──────────────────────────────────────────────
--- Coopératives : 1 par site
+-- Coopératives
 -- ──────────────────────────────────────────────
 INSERT INTO cooperative (nom) VALUES
     ('Miel de Casamance'),
@@ -23,8 +27,8 @@ INSERT INTO cooperative (nom) VALUES
 -- Apicultrices : 8, dont 2 "Aminata Diop" et 1 "Awa Diop"
 -- ──────────────────────────────────────────────
 INSERT INTO apicultrice (nom, telephone, site_id) VALUES
-    ('Aminata Diop',  '+221 77 100 00 01', 'SN-CASA'),   -- homonyme 1
-    ('Aminata Diop',  '+221 77 100 00 02', 'SN-KOLD'),   -- homonyme 2
+    ('Aminata Diop',  '+221 77 100 00 01', 'SN-CASA'),
+    ('Aminata Diop',  '+221 77 100 00 02', 'SN-KOLD'),
     ('Awa Diop',      '+221 77 100 00 03', 'SN-CASA'),
     ('Fatou Ndiaye',  '+221 77 100 00 04', 'SN-KOLD'),
     ('Marie Kouassi', '+225 07 200 00 05', 'CI-BOUA'),
@@ -33,15 +37,13 @@ INSERT INTO apicultrice (nom, telephone, site_id) VALUES
     ('Mireille Fotso','+237 6 55 00 00 08', 'CM-FOUM');
 
 -- ──────────────────────────────────────────────
--- Ruches : 11, dont SN-CASA-099
--- Awa Diop en possède plusieurs
--- Les UUID des apicultrices sont retrouvés par leur téléphone (unique)
+-- Ruches : 11
 -- ──────────────────────────────────────────────
 INSERT INTO ruche (code_ruche, site_id, apicultrice_id, latitude, longitude, date_installation) VALUES
     ('SN-CASA-001', 'SN-CASA', (SELECT id FROM apicultrice WHERE telephone = '+221 77 100 00 01'), 12.55000, -16.27000, DATE '2025-03-10'),
     ('SN-CASA-014', 'SN-CASA', (SELECT id FROM apicultrice WHERE telephone = '+221 77 100 00 03'), 12.55100, -16.27100, DATE '2025-04-02'),
-    ('SN-CASA-099', 'SN-CASA', (SELECT id FROM apicultrice WHERE telephone = '+221 77 100 00 03'), 12.55200, -16.27200, DATE '2025-05-18'),  -- Awa Diop a 2 ruches ici
-    ('SN-CASA-120', 'SN-CASA', (SELECT id FROM apicultrice WHERE telephone = '+221 77 100 00 03'), 12.55300, -16.27300, DATE '2025-06-01'),  -- et une 3e
+    ('SN-CASA-099', 'SN-CASA', (SELECT id FROM apicultrice WHERE telephone = '+221 77 100 00 03'), 12.55200, -16.27200, DATE '2025-05-18'),
+    ('SN-CASA-120', 'SN-CASA', (SELECT id FROM apicultrice WHERE telephone = '+221 77 100 00 03'), 12.55300, -16.27300, DATE '2025-06-01'),
     ('SN-KOLD-005', 'SN-KOLD', (SELECT id FROM apicultrice WHERE telephone = '+221 77 100 00 02'), 12.89000, -14.95000, DATE '2025-03-15'),
     ('SN-KOLD-011', 'SN-KOLD', (SELECT id FROM apicultrice WHERE telephone = '+221 77 100 00 04'), 12.89100, -14.95100, DATE '2025-04-20'),
     ('CI-BOUA-002', 'CI-BOUA', (SELECT id FROM apicultrice WHERE telephone = '+225 07 200 00 05'), 7.68000,  -5.03000,  DATE '2025-02-28'),
@@ -51,8 +53,7 @@ INSERT INTO ruche (code_ruche, site_id, apicultrice_id, latitude, longitude, dat
     ('CM-FOUM-009', 'CM-FOUM', (SELECT id FROM apicultrice WHERE telephone = '+237 6 55 00 00 08'), 5.72100, 10.90100,  DATE '2025-04-11');
 
 -- ──────────────────────────────────────────────
--- Adhésions : chaque apicultrice adhère à la coopérative de son site
--- On s'appuie sur le fait que coop(i) correspond au site(i) : les noms font le lien
+-- Adhésions
 -- ──────────────────────────────────────────────
 INSERT INTO adhesion (apicultrice_id, cooperative_id)
 SELECT a.id,
@@ -66,25 +67,29 @@ SELECT a.id,
 FROM apicultrice a;
 
 -- ──────────────────────────────────────────────
--- Comptes : un par apicultrice (login "initiale.nom"), + 1 coordinateur + 1 administrateur
--- Login : première lettre du prénom + "." + nom de famille, en minuscules
--- Les trois "Diop" produisent "a.diop" en triple (volontaire, exploité au lab 4)
+-- Comptes (correction 1 : mot_de_passe_hash avec bcrypt ; correction 4 : cohérence rôle/site/apicultrice)
+-- Mot de passe initial 'aChanger!2026' pour tout le monde (à changer à la 1ère connexion).
 -- ──────────────────────────────────────────────
-INSERT INTO compte (login, mot_de_passe, role, apicultrice_id, site_id)
+
+-- 8 comptes apicultrices : rattachés à leur apicultrice, site_id NULL
+INSERT INTO compte (login, mot_de_passe_hash, role, apicultrice_id, site_id)
 SELECT lower(left(a.nom, 1)) || '.' || lower(split_part(a.nom, ' ', 2)),
-       'motdepasse_a_changer',
+       crypt('aChanger!2026', gen_salt('bf')),
        'apicultrice',
        a.id,
-       a.site_id
+       NULL
 FROM apicultrice a;
 
-INSERT INTO compte (login, mot_de_passe, role, site_id) VALUES
-    ('coord.casa', 'motdepasse_a_changer', 'coordinateur',   'SN-CASA'),
-    ('admin',      'motdepasse_a_changer', 'administrateur', NULL);
+-- 1 coordinateur : rattaché au site SN-CASA, apicultrice_id NULL
+INSERT INTO compte (login, mot_de_passe_hash, role, apicultrice_id, site_id) VALUES
+    ('coord.casa', crypt('aChanger!2026', gen_salt('bf')), 'coordinateur', NULL, 'SN-CASA');
+
+-- 1 administrateur : ni apicultrice, ni site
+INSERT INTO compte (login, mot_de_passe_hash, role, apicultrice_id, site_id) VALUES
+    ('admin',      crypt('aChanger!2026', gen_salt('bf')), 'administrateur', NULL, NULL);
 
 -- ──────────────────────────────────────────────
--- Mesures : une toutes les 30 minutes pendant 24 h, pour chaque ruche
--- 48 mesures par ruche × 11 ruches = 528
+-- Mesures : 528 (11 ruches × 48 mesures/jour)
 -- ──────────────────────────────────────────────
 INSERT INTO mesure (ruche_id, horodatage, poids_kg, temperature_int, temperature_ext, humidite_pct, activite_sonore, batterie_pct)
 SELECT r.id,
@@ -98,8 +103,7 @@ SELECT r.id,
 FROM ruche r CROSS JOIN generate_series(0, 47) AS h;
 
 -- ──────────────────────────────────────────────
--- Inspections : 6, en laissant au moins 2 ruches jamais inspectées
--- (on choisit 4 ruches, deux d'entre elles reçoivent 2 inspections chacune)
+-- Inspections
 -- ──────────────────────────────────────────────
 INSERT INTO inspection (ruche_id, apicultrice_id, date_inspection, etat_colonie, reine_presente, observations) VALUES
     ((SELECT id FROM ruche WHERE code_ruche = 'SN-CASA-001'),
@@ -107,10 +111,10 @@ INSERT INTO inspection (ruche_id, apicultrice_id, date_inspection, etat_colonie,
      TIMESTAMPTZ '2026-10-15 09:00+00', 'colonie saine',       true,  'Bonne activité'),
     ((SELECT id FROM ruche WHERE code_ruche = 'SN-CASA-014'),
      (SELECT id FROM apicultrice WHERE telephone = '+221 77 100 00 03'),
-     TIMESTAMPTZ '2026-10-18 10:30+00', 'colonie faible',      true,  'Peu d''activité, surveiller'),
+     TIMESTAMPTZ '2026-10-18 10:30+00', 'colonie faible',      true,  'Peu d''activité'),
     ((SELECT id FROM ruche WHERE code_ruche = 'SN-CASA-014'),
      (SELECT id FROM apicultrice WHERE telephone = '+221 77 100 00 03'),
-     TIMESTAMPTZ '2026-10-28 10:00+00', 'colonie saine',       true,  'Nette amélioration'),
+     TIMESTAMPTZ '2026-10-28 10:00+00', 'colonie saine',       true,  'Amélioration'),
     ((SELECT id FROM ruche WHERE code_ruche = 'SN-KOLD-011'),
      (SELECT id FROM apicultrice WHERE telephone = '+221 77 100 00 04'),
      TIMESTAMPTZ '2026-10-20 08:00+00', 'colonie saine',       true,  'RAS'),
@@ -120,10 +124,9 @@ INSERT INTO inspection (ruche_id, apicultrice_id, date_inspection, etat_colonie,
     ((SELECT id FROM ruche WHERE code_ruche = 'CI-BOUA-002'),
      (SELECT id FROM apicultrice WHERE telephone = '+225 07 200 00 05'),
      TIMESTAMPTZ '2026-10-29 11:30+00', 'reine présente',      true,  'Nouvelle reine confirmée');
--- SN-CASA-099, SN-CASA-120, SN-KOLD-005, CI-BOUA-007, CI-BOUA-013, CM-FOUM-004, CM-FOUM-009 : jamais inspectées (7 ruches)
 
 -- ──────────────────────────────────────────────
--- Récoltes : 3 (1 déclarée, 1 validée, 1 refusée pour varier)
+-- Récoltes : 3 (quantité > 0, cohérence validation)
 -- ──────────────────────────────────────────────
 INSERT INTO recolte (ruche_id, date_recolte, quantite_kg, statut, validee_par, date_validation) VALUES
     ((SELECT id FROM ruche WHERE code_ruche = 'SN-CASA-001'),
@@ -136,7 +139,7 @@ INSERT INTO recolte (ruche_id, date_recolte, quantite_kg, statut, validee_par, d
      DATE '2026-10-24',  8.20, 'declaree', NULL, NULL);
 
 -- ──────────────────────────────────────────────
--- Alertes : 4, sur 2 sites (SN-CASA et CI-BOUA)
+-- Alertes : 4
 -- ──────────────────────────────────────────────
 INSERT INTO alerte (ruche_id, horodatage, type, niveau_confiance) VALUES
     ((SELECT id FROM ruche WHERE code_ruche = 'SN-CASA-099'),
@@ -149,8 +152,3 @@ INSERT INTO alerte (ruche_id, horodatage, type, niveau_confiance) VALUES
      TIMESTAMPTZ '2026-11-08 18:15+00', 'essaimage',          0.64);
 
 COMMIT;
-
-
--- La règle qui protège : la clé primaire, qui interdit deux lignes avec le même identifiant. 
--- L’effet s’applique aussi à toutes les autres tables : 
--- si le script passait la barrière des sites, il échouerait ensuite sur cooperative, ruche, etc. pour la même raison
