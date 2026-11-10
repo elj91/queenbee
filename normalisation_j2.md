@@ -258,3 +258,153 @@ Si plusieurs opérations sont enregistrées dans la même transaction (ex.
 le même horodatage. `clock_timestamp()` renvoie **l'heure réelle au moment
 de l'appel**, donc chaque ligne de journal a son propre horodatage et l'ordre
 chronologique est exact.
+
+## Étape 8.2 · Les CHECK nommés
+
+| Table | Contrainte | Règle |
+|---|---|---|
+| mesure | mesure_batterie_0_100 | batterie entre 0 et 100 |
+| mesure | mesure_humidite_0_100 | humidité entre 0 et 100 |
+| mesure | mesure_poids_positif | poids positif ou nul |
+| alerte | alerte_statut_valide | statut ∈ {ouverte, en_cours, traitee} |
+| alerte | alerte_type_valide | type ∈ {essaimage, vol, capteur_silencieux} (déjà en Jour 1) |
+| alerte | alerte_confiance_valide | niveau entre 0 et 1 (déjà en Jour 1) |
+| recolte | recolte_quantite_positive | quantité > 0 (corrigée en Jour 1) |
+| recolte | recolte_statut_valide | statut ∈ {declaree, validee, refusee} |
+| recolte | recolte_validation_coherente | validation complète ou absente |
+| compte | compte_role_valide | role ∈ {apicultrice, coordinateur, gestionnaire, administrateur} |
+| compte | compte_role_coherent | cohérence rôle ↔ apicultrice_id ↔ site_id (corrigée en Jour 1) |
+
+Pourquoi des CHECK nommés : le message d'erreur cite le nom de la contrainte,
+donc le développeur (ou le mainteneur) sait immédiatement **quelle règle métier**
+a été violée, pas juste quelle colonne.
+
+### Tests
+
+- `batterie_pct = 150` → `ERROR: violates check constraint "mesure_batterie_0_100"` ✓
+- `statut = 'fermee'` → `ERROR: violates check constraint "alerte_statut_valide"` ✓
+
+## Étape 8.3 · Le trigger d'audit
+
+### Trois fonctions
+
+- **`qui()`** : retourne le rôle actif (`current_setting('role')` après `SET ROLE`),
+  ou l'utilisateur connecté (`session_user`) si pas de `SET ROLE`. Permet de nommer
+  le **vrai acteur** dans le journal, même quand la commande s'exécute via une
+  fonction `SECURITY DEFINER`.
+
+- **`audit_ligne()`** : trigger de ligne, `SECURITY DEFINER` avec
+  `search_path = public, pg_temp` (anti-détournement). Écrit une ligne dans
+  `journal_audit` avec `qui()`, la table, l'opération, l'`id`, et les versions
+  JSONB `avant`/`apres`.
+
+- **`journal_interdit()`** : trigger de refus. Lance une exception quelle que
+  soit l'opération. Attaché en `BEFORE UPDATE OR DELETE` (par ligne) et en
+  `BEFORE TRUNCATE` (par instruction) sur `journal_audit`.
+
+### Attachement
+
+- `recolte_audit` sur `recolte` → preuve de production (UC-C02).
+- `compte_audit` sur `compte` → gestion des utilisateurs (UC-AD01).
+- `journal_ajout_seul` + `journal_sans_truncate` → journal immuable.
+
+### Tests
+
+- `UPDATE recolte SET quantite_kg = 14` → 1 ligne de journal avec `avant_kg = 12.50`, `apres_kg = 14.00` ✓
+- `UPDATE journal_audit SET acteur = 'pirate'` → refus ✓
+- `DELETE FROM journal_audit` → refus ✓
+- `TRUNCATE journal_audit` → refus ✓
+
+### Limite : un superutilisateur peut désactiver un trigger
+
+`ALTER TABLE journal_audit DISABLE TRIGGER journal_ajout_seul` passe sous
+`postgres` (propriétaire). Trois conséquences :
+
+1. Ne jamais faire tourner l'application en `postgres`.
+2. Copier le journal **hors de la base** (vers un SIEM) régulièrement, pour avoir
+   une copie que le DBA lui-même ne peut pas modifier sur la base principale.
+3. Le journal protège contre les attaques **par l'application**, pas contre
+   un attaquant qui prend le serveur.
+
+   ## Étape 8.4 · Les rôles et les vues de moindre privilège
+
+### 4 groupes + 5 personnes
+
+| Groupe (NOLOGIN) | Personne (LOGIN) | Rôle métier |
+|---|---|---|
+| qb_apicultrice | a.diop, awa.diop | déclarer ses récoltes, lire ses mesures |
+| qb_coordinateur | coord.casa | valider les récoltes de son site |
+| qb_gestionnaire | gest.beeafrica | lire la synthèse, l'export bailleur |
+| qb_admin | admin.beeafrica | CRUD sur compte, lire le journal |
+
+### Vues
+
+- **v_moi** : son propre compte. Pas de FK vers apicultrice, pas de hash.
+- **v_mes_ruches** : ses ruches (via `compte.apicultrice_id`).
+- **v_mes_mesures** : mesures des ruches dans v_mes_ruches (sous-requête).
+- **v_mes_recoltes** : ses récoltes **declarees** uniquement, avec `WITH CHECK OPTION`
+  (empêche un INSERT qui donnerait une ligne invisible — statut = 'validee' par exemple).
+- **v_ruches_site** : ruches du site du coordinateur, avec le téléphone de l'apicultrice
+  (le coordinateur a besoin de contacter l'apicultrice pour une inspection urgente).
+- **v_recoltes_site** : récoltes du site du coordinateur, pour qu'il voit lesquelles
+  valider.
+
+### GRANTs minimaux
+
+L'apicultrice **n'a pas** `SELECT` sur `apicultrice`, `ruche` ou `mesure` directement.
+Seules les vues lui sont ouvertes, et chaque vue filtre par `qui()`. Cela
+rend la base **autonome** vis-à-vis de l'application : même si l'application est
+bogguée et ne filtre pas, PostgreSQL le fait.
+
+## Étape 8.5 · La validation d'une récolte, par fonction
+
+### Pourquoi une fonction et pas un UPDATE direct ?
+
+Donner `UPDATE ON recolte TO qb_coordinateur` serait trop large : le coordinateur
+pourrait changer `quantite_kg`, le statut à `refusee` sans raison, ou la date.
+La fonction `valider_recolte(uuid)` ne fait **qu'une chose** : passer `declaree`
+→ `validee` sur une récolte de son site, avec son `id` comme `validee_par` et
+`now()` comme `date_validation`.
+
+### SECURITY DEFINER
+
+La fonction tourne avec les droits de son **propriétaire** (postgres), pas de
+son appelant (coord.casa). Le coordinateur n'a donc **aucun droit direct** sur
+la table `recolte`, mais peut l'écrire **à travers** la fonction. Trois garde-fous :
+
+1. `SET search_path = public, pg_temp` : un attaquant ne peut pas détourner la
+   fonction en créant un objet dans un autre schéma.
+2. `GRANT EXECUTE ... TO qb_coordinateur` seulement : l'apicultrice ne peut même
+   pas appeler la fonction (elle obtient `permission denied for function`).
+3. Vérifications métier dans le corps : rôle du compte, statut `declaree`,
+   ruche du bon site. `GET DIAGNOSTICS ... ROW_COUNT = 0` → exception explicite.
+
+### Tests
+
+- coord.casa valide une récolte declaree de SN-CASA → OK (statut = validee, trace dans journal_audit via le trigger recolte_audit) ✓
+- coord.casa revalide la même récolte → `ERROR: récolte introuvable, déjà traitée ou hors de votre site` ✓
+- a.diop tente d'appeler la fonction → `ERROR: permission denied for function valider_recolte` ✓
+
+## Étape 8.6 · Les 12 tests de contournement
+
+12 tests, tous donnent le refus (ou l'acceptation) attendu :
+
+| # | Qui | Tentative | Attendu | Observé |
+|---|---|---|---|---|
+| 1 | a.diop | `SELECT * FROM apicultrice` | permission denied | ✓ |
+| 2 | a.diop | `SELECT * FROM v_mes_ruches` | ses ruches seulement | ✓ |
+| 3 | a.diop | `INSERT INTO v_mes_recoltes` sur sa ruche | accepté | ✓ |
+| 4 | a.diop | `INSERT INTO v_mes_recoltes` sur une autre ruche | CHECK OPTION | ✓ |
+| 5 | a.diop | `INSERT INTO recolte ... statut = 'validee'` | permission denied | ✓ |
+| 6 | a.diop | `UPDATE recolte SET quantite_kg = 99` | permission denied | ✓ |
+| 7 | a.diop | `SELECT valider_recolte(...)` | permission denied | ✓ |
+| 8 | a.diop | `INSERT INTO journal_audit` | permission denied | ✓ |
+| 9 | a.diop | `ALTER TABLE recolte DISABLE TRIGGER` | must be owner | ✓ |
+| 10 | coord.casa | revalider la même récolte | refus explicite | ✓ |
+| 11 | coord.casa | valider une récolte d'un autre site | refus explicite | ✓ |
+| 12 | admin.beeafrica | `DELETE FROM compte` | permission denied (seuls SELECT/INSERT/UPDATE) | ✓ |
+
+**Le journal nomme les vrais acteurs** : les actions de a.diop (via v_mes_recoltes)
+et de coord.casa (via valider_recolte) apparaissent dans `journal_audit.acteur`
+comme `a.diop` et `coord.casa`, grâce à la fonction `qui()` et à
+`SET search_path` sur les fonctions SECURITY DEFINER.
