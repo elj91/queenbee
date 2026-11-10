@@ -89,4 +89,4 @@ CREATE TABLE journal_audit (
     avant        jsonb,                                                -- la ligne avant
     apres        jsonb                                                 -- la ligne après
 );
-REVOKE ALL ON journal_audit FROM
+REVOKE ALL ON journal_audit FROM PUBLIC;
