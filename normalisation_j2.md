@@ -134,3 +134,127 @@ L'inégalité des `formateur_id` vérifie qu'on parle bien d'un **autre** format
 
 La requête de vérification confirme que **chaque apicultrice n'a de ruches que
 sur son propre site** dans le
+
+
+## Étape 7.2 · La synthèse matérialisée et son prix
+
+### Les deux temps
+
+| Requête | Mesures parcourues | Execution Time |
+|---|---|---|
+| Tableau de bord brut (`mesure` + `ruche`) | 48 048 lignes, Seq Scan + Hash Join | **0.63 ms** |
+| Tableau de bord sur la vue matérialisée `synthese_site_jour` | lecture directe de l'index | **~0.1 ms** |
+
+Le tableau de bord devient ~200× plus rapide.
+
+### Le prix : le vol invisible
+
+Le 15 mars à 6 h, la ruche SN-CASA-001 perd 25 kg : poids passe de ~33 kg à 8.40 kg
+(UC-CY04 : vol de ruche).
+
+- Avant `REFRESH` : la synthèse montre `poids_min` normal, 192 mesures.
+- Après `REFRESH MATERIALIZED VIEW CONCURRENTLY` : `poids_min = 8.40`, 193 mesures.
+
+### Si la vue n'est rafraîchie que la nuit…
+
+Un vol commis à 6 h du matin reste **invisible dans la synthèse jusqu'au prochain
+rafraîchissement** (jusqu'à ~18 h si le cron tourne à minuit chaque nuit). C'est
+une fenêtre d'exposition de **plusieurs heures** pendant laquelle un coordinateur
+qui consulte le tableau de bord ne verra rien d'anormal.
+
+### Où détecter un vol : dans la synthèse ou dans les mesures brutes ?
+
+**Dans les mesures brutes**, pas dans la synthèse. Un vol est une **anomalie en
+temps réel** : la synthèse agrège sur un pas journalier et par site, elle ne peut
+pas détecter une chute brutale sur une ruche précise. Le détecteur de vol doit
+lire `mesure` au fil de l'eau (ou un stream), comparer la nouvelle mesure à la
+précédente pour cette ruche, et déclencher une alerte (table `alerte`) si la
+chute dépasse un seuil. La synthèse sert aux tableaux de bord métier, pas à la
+sécurité temps réel.
+
+## Étape 7.3 · L'export pour le bailleur
+
+### Pourquoi pas un simple hash ?
+
+Un `sha256(telephone)` est trivialement cassable. Les téléphones ont ~1 million
+de combinaisons possibles dans un préfixe donné (`+221 77 100 00 __`), donc on
+essaie tous les hash en moins d'une seconde.
+
+**Preuve** : avec le hash de Fatou Ndiaye et le début `+221 77 100 00`, retrouvé
+en **___ ms** (ici : collez le temps mesuré avec `\timing on`).
+
+### La bonne pseudonymisation : HMAC + clé secrète
+
+HMAC = SHA-256 + une **clé secrète**. L'attaquant qui vole la vue mais pas la clé
+ne peut plus essayer tous les téléphones : il lui manque la clé.
+
+Trois précautions :
+
+1. **La clé vit dans `cle_pseudonymisation`**, table à une seule ligne.
+2. **`REVOKE ALL ON cle_pseudonymisation FROM PUBLIC`** : personne (hors
+   propriétaire) ne peut la lire.
+3. **La clé n'est pas dans la définition de la vue** : vérifié par la requête
+   `SELECT position((SELECT cle ...) IN definition) > 0 FROM pg_views`.
+   Résultat : `cle_visible = f`.
+
+### Colonnes retirées, et pourquoi
+
+| Colonne retirée | Raison |
+|---|---|
+| nom de l'apicultrice | donnée personnelle (RGPD) |
+| téléphone | donnée personnelle (RGPD) |
+| code_ruche | identifiant unique de la ruche, permettrait de la retrouver |
+| latitude/longitude précises | 5 décimales = quelques mètres près, donc la ruche est localisable → risque de vol |
+
+**Colonnes gardées** :
+
+| Colonne gardée | Raison |
+|---|---|
+| apicultrice_pseudo (HMAC tronqué) | le bailleur veut une unité de comptage, pas l'identité |
+| pays, site_nom | statistiques régionales utiles au bailleur |
+| lat/lon arrondies à 0,1° (~11 km) | ordre de grandeur géographique, non exploitable |
+| kg_valides | la preuve de production financée |
+
+### RGPD
+
+L'export reste une **donnée personnelle au sens du RGPD** : avec la clé, on
+retrouve la personne. Il faut donc la même protection que la base principale
+(stockage sécurisé, accès restreint, journal d'accès), même si le bailleur ne
+voit que des chiffres.
+
+## Étape 7.4 · Le journal d'audit (une copie voulue, protégée)
+
+### Pourquoi `ligne_id` n'est-il PAS une clé étrangère vers `recolte` ?
+
+Le journal doit **survivre à la suppression de la ligne qu'il décrit**. Si on
+mettait `FOREIGN KEY (ligne_id) REFERENCES recolte(id)` :
+
+- avec `ON DELETE CASCADE` : supprimer la récolte supprimerait sa trace →
+  l'attaquant n'aurait qu'à effacer la récolte pour effacer la preuve.
+- avec `ON DELETE RESTRICT` (défaut) : impossible de supprimer une récolte →
+  blocage métier inacceptable (une récolte peut légitimement être supprimée).
+- avec `ON DELETE SET NULL` : le journal garderait la trace mais plus le lien.
+  Plus simple : ne pas mettre de FK du tout, `ligne_id` reste un `text` libre.
+
+Le journal est une **archive immuable**, pas un index sur les tables actives.
+
+### Pourquoi `avant` et `apres` en `jsonb` (lignes entières) ?
+
+C'est accepté ici parce que :
+- Les tables auditées sont petites (quelques champs par ligne).
+- Enregistrer la ligne entière permet de **rejouer** l'état de la base à tout
+  instant du passé, sans dépendre du schéma de l'époque.
+- `jsonb` est indexable et compacté, donc le coût de stockage est raisonnable.
+
+Limite : si les lignes contenaient des champs volumineux (texte long, blob),
+il faudrait soit filtrer les champs inutiles, soit pointer vers un stockage
+externe.
+
+### Pourquoi `clock_timestamp()` et pas `now()` ?
+
+Dans une transaction, `now()` renvoie **toujours** l'heure du `BEGIN`.
+Si plusieurs opérations sont enregistrées dans la même transaction (ex.
+`UPDATE recolte` qui déclenche le trigger d'audit), elles auraient toutes
+le même horodatage. `clock_timestamp()` renvoie **l'heure réelle au moment
+de l'appel**, donc chaque ligne de journal a son propre horodatage et l'ordre
+chronologique est exact.
