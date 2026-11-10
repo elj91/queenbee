@@ -24,14 +24,26 @@
 
 | Table | Clé | DF restantes | BCNF ? |
 |---|---|---|---|
-| norm.site | site_id | site_id → site_nom, pays | oui : la partie gauche EST la clé |
-| norm.apicultrice | telephone | telephone → apicultrice, site_id, cooperative | oui : la partie gauche EST la clé |
-| norm.ruche | ruche_code | ruche_code → site_id, telephone | oui : la partie gauche EST la clé |
-| norm.mesure | (ruche_code, horodatage) | (ruche_code, horodatage) → poids_kg, temp_int_c | oui : la partie gauche EST la clé |
+| norm.site | site_id | site_id → site_nom, pays | oui : partie gauche = clé |
+| norm.apicultrice | telephone | telephone → apicultrice, site_id, cooperative | oui : partie gauche = clé |
+| norm.ruche | ruche_code | ruche_code → telephone | oui : partie gauche = clé |
+| norm.mesure | (ruche_code, horodatage) | (ruche_code, horodatage) → poids_kg, temp_int_c | oui : partie gauche = clé |
+
+**Correction post-rendu :** `norm.ruche` ne stocke plus `site_id`. On avait au départ
+`norm.ruche (ruche_code, site_id, telephone)`, mais puisque `norm.apicultrice` contient déjà
+`telephone → site_id`, garder `site_id` dans `norm.ruche` aurait été une
+**dépendance transitive** (`ruche_code → telephone → site_id`), donc une violation 3NF/BCNF —
+le même défaut qu'on reprochait à `extrait_plat`. Le site d'une ruche se déduit maintenant
+par jointure : `ruche → apicultrice → site`, ce qui garantit qu'il ne peut jamais y avoir
+deux versions contradictoires du site d'une ruche.
+
+**Hypothèse métier assumée :** une ruche vit sur le site de son apicultrice. Si ce n'était
+plus vrai (une apicultrice pouvant avoir des ruches sur plusieurs sites), il faudrait
+créer une table `norm.ruche_site (ruche_code, site_id)` avec sa propre clé étrangère,
+et non pas dupliquer `site_id` dans `norm.ruche`.
 
 Toutes les tables sont en **BCNF** : la partie gauche de chaque DF est la clé primaire
-de sa table. Aucune donnée n'est recopiée, donc aucune mise à jour ne peut créer
-de version contradictoire.
+de sa table. Aucune donnée n'est recopiée.
 
 ## Preuve sans perte
 
